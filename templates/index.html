@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>⚡ AI Data Center Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: radial-gradient(circle at top, #0a0f2c, #020617);
+            color: white;
+        }
+
+        h1 {
+            text-align: center;
+            padding: 20px;
+            font-size: 32px;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 22px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+
+        .kpi-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            padding: 0 20px;
+        }
+
+        .kpi {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 0 15px rgba(0,255,255,0.15);
+        }
+
+        .sla {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            padding: 20px;
+        }
+
+        .sla-card {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 15px;
+            padding: 20px;
+        }
+
+        .card {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .value {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .charts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .chart-box {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 10px;
+            height: 250px;
+        }
+
+        .chart-box canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        .alerts {
+            margin: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255,0,0,0.1);
+            animation: glow 1.5s infinite alternate;
+        }
+
+        @keyframes glow {
+            from { box-shadow: 0 0 8px red; }
+            to { box-shadow: 0 0 20px red; }
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>⚡ AI Data Center Monitoring Dashboard</h1>
+<h2 id="status" class="status">Status: --</h2>
+
+<div class="kpi-container">
+    <div class="kpi">Total Data<br><h3 id="total">0</h3></div>
+    <div class="kpi">Filtered<br><h3 id="filtered">0</h3></div>
+    <div class="kpi">Alerts<br><h3 id="alertsCount">0</h3></div>
+    <div class="kpi">Efficiency<br><h3 id="eff">0%</h3></div>
+</div>
+
+<div class="sla">
+    <div class="sla-card">SLA Health<br><h3 id="sla">0%</h3></div>
+    <div class="sla-card">Compliance<br><h3 id="comp">0%</h3></div>
+    <div class="sla-card">Active Alerts<br><h3 id="active">0</h3></div>
+</div>
+
+<div class="cards">
+    <div class="card">Temperature<div class="value" id="temp">--</div></div>
+    <div class="card">Humidity<div class="value" id="humidity">--</div></div>
+    <div class="card">Airflow<div class="value" id="airflow">--</div></div>
+    <div class="card">CPU Load<div class="value" id="cpu">--</div></div>
+    <div class="card">Heat Index<div class="value" id="heat">--</div></div>
+</div>
+
+<div class="charts">
+    <div class="chart-box"><canvas id="tempChart"></canvas></div>
+    <div class="chart-box"><canvas id="humChart"></canvas></div>
+    <div class="chart-box"><canvas id="airChart"></canvas></div>
+    <div class="chart-box"><canvas id="cpuChart"></canvas></div>
+</div>
+
+<div class="alerts">
+    <h3>🚨 Active Alerts</h3>
+    <div id="alertBox">No alerts</div>
+</div>
+
+<script>
+let charts = {};
+
+function createChart(id, label) {
+    return new Chart(document.getElementById(id), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: label,
+                data: [],
+                borderWidth: 2,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    });
+}
+
+charts.temp = createChart("tempChart", "Temperature");
+charts.hum  = createChart("humChart", "Humidity");
+charts.air  = createChart("airChart", "Airflow");
+charts.cpu  = createChart("cpuChart", "CPU");
+
+async function fetchData() {
+    const res = await fetch('data');
+    const data = await res.json();
+
+    const history = data.history || [];
+    const latest = data.latest || {};
+    const stats  = data.fog_stats || {};
+
+    temp.innerText = latest.temperature || "--";
+    humidity.innerText = latest.humidity || "--";
+    airflow.innerText = latest.airflow || "--";
+    cpu.innerText = latest.cpu_load || "--";
+    heat.innerText = latest.heat_index || "--";
+
+    let status = latest.status || "--";
+    let s = document.getElementById("status");
+    s.innerText = "Status: " + status;
+
+    if (status === "CRITICAL") s.style.color = "red";
+    else if (status === "WARNING") s.style.color = "orange";
+    else s.style.color = "lightgreen";
+
+    total.innerText = stats.total_received || 0;
+    filtered.innerText = stats.total_filtered || 0;
+    alertsCount.innerText = stats.critical_alerts || 0;
+
+    let eff = stats.total_received ? 
+        ((stats.total_filtered / stats.total_received) * 100).toFixed(1) : 0;
+    document.getElementById("eff").innerText = eff + "%";
+
+    document.getElementById("sla").innerText = (100 - eff).toFixed(1) + "%";
+    document.getElementById("comp").innerText = (100 - stats.critical_alerts).toFixed(1) + "%";
+    document.getElementById("active").innerText = stats.critical_alerts || 0;
+
+    let alerts = latest.alerts || [];
+    alertBox.innerHTML = alerts.length ? alerts.join("<br>") : "No alerts";
+
+    let labels = history.map((_, i) => i);
+
+    function update(chart, key) {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = history.map(x => x[key]);
+        chart.update();
+    }
+
+    update(charts.temp, "temperature");
+    update(charts.hum, "humidity");
+    update(charts.air, "airflow");
+    update(charts.cpu, "cpu_load");
+}
+
+setInterval(fetchData, 2000);
+</script>
+
+</body>
+</html>
