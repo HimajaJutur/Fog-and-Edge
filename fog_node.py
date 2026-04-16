@@ -9,21 +9,19 @@ Responsibilities:
   2. Process & classify: NORMAL / WARNING / CRITICAL
   3. Filter out redundant readings (edge intelligence)
   4. Forward meaningful data to AWS API Gateway
-  5. Serve the /dashboard endpoint (used by dashboard app)
+  5. Serve the /dashboard-data endpoint (used by dashboard app)
   6. Expose /stats for fog reduction metrics
 """
 
 from flask import Flask, request, jsonify
 from datetime import datetime
 import requests
-import math
 import os
-import json
 
 app = Flask(__name__)
 
 # ─────────────────────────────────────────
-# CONFIGURATION  — edit these values
+# CONFIGURATION  — edit these values or set env vars
 # ─────────────────────────────────────────
 AWS_API_GATEWAY_URL = os.environ.get(
     "AWS_API_GATEWAY_URL",
@@ -31,16 +29,16 @@ AWS_API_GATEWAY_URL = os.environ.get(
 )
 
 # Thresholds
-TEMP_CRITICAL  = 80    # °C
-TEMP_WARNING   = 70    # °C
-AIRFLOW_LOW    = 40    # %  — below this = "low airflow"
+TEMP_CRITICAL = 80    # °C
+TEMP_WARNING  = 70    # °C
+AIRFLOW_LOW   = 40    # % — below this = "low airflow"
 
 # ─────────────────────────────────────────
 # IN-MEMORY STORE  (last 50 readings)
 # ─────────────────────────────────────────
-MAX_HISTORY   = 50
-data_history  = []     # processed readings for dashboard
-fog_stats     = {
+MAX_HISTORY  = 50
+data_history = []     # processed readings for dashboard
+fog_stats    = {
     "total_received":  0,
     "total_forwarded": 0,
     "total_filtered":  0,
@@ -54,8 +52,6 @@ last_forwarded = None   # used for duplicate filter
 # ─────────────────────────────────────────
 def classify_status(temp: float, airflow: float) -> str:
     """Return NORMAL / WARNING / CRITICAL based on sensor values."""
-    if temp > TEMP_CRITICAL and airflow < AIRFLOW_LOW:
-        return "CRITICAL"
     if temp > TEMP_CRITICAL:
         return "CRITICAL"
     if temp > TEMP_WARNING:
@@ -64,44 +60,40 @@ def classify_status(temp: float, airflow: float) -> str:
 
 
 def generate_alerts(status: str, temp: float, airflow: float,
-                    humidity: float, cpu_load: float) -> list[str]:
+                    humidity: float, cpu_load: float) -> list:
     """Return human-readable alert strings for the given reading."""
     alerts = []
     if status == "CRITICAL":
-        alerts.append(f"🔴 CRITICAL: Temperature {temp}°C exceeds safe limit (>{TEMP_CRITICAL}°C)")
+        alerts.append(f"CRITICAL: Temperature {temp}°C exceeds safe limit (>{TEMP_CRITICAL}°C)")
         if airflow < AIRFLOW_LOW:
-            alerts.append(f"🔴 CRITICAL: Low airflow detected ({airflow}%) — cooling failure risk!")
+            alerts.append(f"CRITICAL: Low airflow detected ({airflow}%) — cooling failure risk!")
     elif status == "WARNING":
-        alerts.append(f"🟡 WARNING: Temperature {temp}°C approaching critical threshold")
+        alerts.append(f"WARNING: Temperature {temp}°C approaching critical threshold")
     if humidity > 70:
-        alerts.append(f"⚠  High humidity ({humidity}%) — condensation risk")
+        alerts.append(f"High humidity ({humidity}%) — condensation risk")
     if cpu_load > 90:
-        alerts.append(f"⚠  CPU Load very high ({cpu_load}%)")
+        alerts.append(f"CPU Load very high ({cpu_load}%)")
     return alerts
 
 
 def should_forward(processed: dict, status: str) -> bool:
     """
     Edge intelligence: decide whether to forward to cloud.
-    Skip if the status is NORMAL and the reading is very similar
-    to the last forwarded one (reduces cloud traffic by ~60 %).
+    Always forwards WARNING/CRITICAL.
+    Skips NORMAL if reading is very similar to the last forwarded one.
     """
     global last_forwarded
 
-    # Always forward WARNING / CRITICAL
     if status != "NORMAL":
         return True
 
-    # Forward if no previous reading
     if last_forwarded is None:
         return True
 
-    # Forward if temperature changed by more than 3 °C
     delta_temp = abs(processed["temperature"] - last_forwarded.get("temperature", 0))
     if delta_temp > 3:
         return True
 
-    # Otherwise skip — fog filtering in action
     return False
 
 
@@ -118,7 +110,6 @@ def receive_sensor_data():
 
     fog_stats["total_received"] += 1
 
-    # Extract fields
     temp      = raw.get("temperature", 0)
     humidity  = raw.get("humidity", 0)
     airflow   = raw.get("airflow", 0)
@@ -127,33 +118,29 @@ def receive_sensor_data():
     sensor_id = raw.get("sensor_id", "UNKNOWN")
     timestamp = raw.get("timestamp", datetime.utcnow().isoformat() + "Z")
 
-    # Classify
     status = classify_status(temp, airflow)
     alerts = generate_alerts(status, temp, airflow, humidity, cpu_load)
 
     if status == "CRITICAL":
         fog_stats["critical_alerts"] += 1
 
-    # Build processed payload
     processed = {
-        "sensor_id":   sensor_id,
-        "timestamp":   timestamp,
+        "sensor_id":     sensor_id,
+        "timestamp":     timestamp,
         "fog_timestamp": datetime.utcnow().isoformat() + "Z",
-        "temperature": temp,
-        "humidity":    humidity,
-        "airflow":     airflow,
-        "cpu_load":    cpu_load,
-        "heat_index":  heat_idx,
-        "status":      status,
-        "alerts":      alerts,
+        "temperature":   temp,
+        "humidity":      humidity,
+        "airflow":       airflow,
+        "cpu_load":      cpu_load,
+        "heat_index":    heat_idx,
+        "status":        status,
+        "alerts":        alerts,
     }
 
-    # Store in history (for dashboard)
     data_history.append(processed)
     if len(data_history) > MAX_HISTORY:
         data_history.pop(0)
 
-    # Decide whether to forward
     forward = should_forward(processed, status)
 
     if forward:
@@ -162,11 +149,11 @@ def receive_sensor_data():
         cloud_result = forward_to_cloud(processed)
         processed["cloud_forwarded"] = True
         processed["cloud_response"]  = cloud_result
-        print(f"[FOG] ✓ Forwarded to cloud | STATUS={status} | Temp={temp}°C")
+        print(f"[FOG] Forwarded to cloud | STATUS={status} | Temp={temp}°C")
     else:
         fog_stats["total_filtered"] += 1
         processed["cloud_forwarded"] = False
-        print(f"[FOG] ⊘ Filtered (NORMAL, minimal change) | Temp={temp}°C")
+        print(f"[FOG] Filtered (NORMAL, minimal change) | Temp={temp}°C")
 
     return jsonify({
         "status":          status,
@@ -180,7 +167,7 @@ def receive_sensor_data():
 # FORWARD TO AWS
 # ─────────────────────────────────────────
 def forward_to_cloud(payload: dict) -> dict:
-    """Send processed data to AWS API Gateway. Returns response or error info."""
+    """Send processed data to AWS API Gateway."""
     try:
         resp = requests.post(
             AWS_API_GATEWAY_URL,
@@ -188,12 +175,13 @@ def forward_to_cloud(payload: dict) -> dict:
             timeout=8,
             headers={"Content-Type": "application/json"},
         )
+        print(f"[FOG] Cloud response: {resp.status_code}")
         return {"http_status": resp.status_code, "body": resp.text[:200]}
     except requests.exceptions.ConnectionError:
-        print("[FOG] ✗ Cannot reach AWS — check AWS_API_GATEWAY_URL")
+        print("[FOG] Cannot reach AWS — check AWS_API_GATEWAY_URL")
         return {"error": "connection_error"}
     except Exception as e:
-        print(f"[FOG] ✗ Cloud forward error: {e}")
+        print(f"[FOG] Cloud forward error: {e}")
         return {"error": str(e)}
 
 
@@ -203,8 +191,8 @@ def forward_to_cloud(payload: dict) -> dict:
 @app.route("/dashboard-data", methods=["GET"])
 def dashboard_data():
     return jsonify({
-        "history":  data_history[-20:],   # last 20 for chart
-        "latest":   data_history[-1] if data_history else {},
+        "history":   data_history[-20:],
+        "latest":    data_history[-1] if data_history else {},
         "fog_stats": fog_stats,
     })
 
